@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>PDOS Tổng Hợp - Quantum ESPRESSO</title>
+<style>
+body { font-family: Arial, sans-serif; margin: 20px; }
+h1 { color: #333; }
+#dropzone {
+  border: 2px dashed #666; padding: 20px; text-align: center;
+  margin-bottom: 20px; background: #f9f9f9;
+}
+table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+th, td { border: 1px solid #ccc; padding: 4px; text-align: right; }
+th { background: #eee; }
+button { margin: 5px; padding: 8px 12px; }
+input { margin: 5px; padding: 6px; }
+</style>
+</head>
+<body>
+<h1>Web xử lý PDOS (Quantum ESPRESSO)</h1>
+
+<label>Nhập tên strain: <input type="text" id="strainName" placeholder="Ví dụ: -4%"></label><br>
+<input type="file" id="fileInput" multiple><br>
+
+<div id="dropzone">Kéo và thả các file PDOS vào đây</div>
+
+<button id="processBtn">Xử lý dữ liệu</button>
+<button id="copyBtn">Copy cho Origin</button>
+<button id="downloadBtn">Download TSV</button>
+
+<div id="result"></div>
+
+<script>
+let files = [];
+
+document.getElementById('fileInput').addEventListener('change', e => {
+  files = Array.from(e.target.files);
+});
+
+document.getElementById('dropzone').addEventListener('dragover', e => {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+});
+document.getElementById('dropzone').addEventListener('drop', e => {
+  e.preventDefault();
+  files = Array.from(e.dataTransfer.files);
+});
+
+function parseFileName(name) {
+  // Ví dụ: ...pdos_atm#5(Pb)_wfc#3(d)
+  const match = name.match(/\((\w+)\).*_wfc#\d+\((\w)\)/);
+  if (!match) return null;
+  return { element: match[1], orbital: match[2] };
+}
+
+async function readFile(file) {
+  const text = await file.text();
+  const lines = text.trim().split(/\r?\n/);
+  const data = lines.map(line => line.trim().split(/\s+/).map(Number));
+  return data;
+}
+
+document.getElementById('processBtn').addEventListener('click', async () => {
+  if (files.length === 0) {
+    alert("Chưa chọn file!");
+    return;
+  }
+  let allData = {};
+  let energyGrid = null;
+
+  for (let file of files) {
+    const info = parseFileName(file.name);
+    if (!info) { alert("Không nhận diện được file: " + file.name); return; }
+    const data = await readFile(file);
+
+    if (!energyGrid) {
+      energyGrid = data.map(row => row[0]);
+    } else {
+      const grid = data.map(row => row[0]);
+      for (let i=0;i<grid.length;i++) {
+        if (grid[i] !== energyGrid[i]) {
+          alert("Lưới Energy khác nhau giữa các file!");
+          return;
+        }
+      }
+    }
+
+    // Bỏ cột ldos (cột 2), cộng tất cả các cột còn lại
+    for (let i=0;i<data.length;i++) {
+      const energy = data[i][0];
+      const pdosSum = data[i].slice(2).reduce((a,b)=>a+b,0);
+      const key = info.element + "-" + info.orbital;
+      if (!allData[key]) allData[key] = Array(energyGrid.length).fill(0);
+      allData[key][i] += pdosSum;
+    }
+  }
+
+  // Tạo bảng kết quả
+  const headers = ["Energy (eV)", "S-s", "S-p", "Pb-s", "Pb-p", "Pb-d"];
+  let resultTable = "<table><tr>" + headers.map(h=>"<th>"+h+"</th>").join("") + "</tr>";
+  for (let i=0;i<energyGrid.length;i++) {
+    resultTable += "<tr>";
+    resultTable += "<td>"+energyGrid[i].toFixed(6)+"</td>";
+    resultTable += "<td>"+(allData["S-s"]?allData["S-s"][i]:0).toPrecision(8)+"</td>";
+    resultTable += "<td>"+(allData["S-p"]?allData["S-p"][i]:0).toPrecision(8)+"</td>";
+    resultTable += "<td>"+(allData["Pb-s"]?allData["Pb-s"][i]:0).toPrecision(8)+"</td>";
+    resultTable += "<td>"+(allData["Pb-p"]?allData["Pb-p"][i]:0).toPrecision(8)+"</td>";
+    resultTable += "<td>"+(allData["Pb-d"]?allData["Pb-d"][i]:0).toPrecision(8)+"</td>";
+    resultTable += "</tr>";
+  }
+  resultTable += "</table>";
+  document.getElementById('result').innerHTML = resultTable;
+
+  // Lưu dữ liệu để copy/download
+  window.finalTSV = headers.join("\t") + "\n";
+  for (let i=0;i<energyGrid.length;i++) {
+    window.finalTSV += energyGrid[i].toFixed(6) + "\t" +
+      (allData["S-s"]?allData["S-s"][i]:0) + "\t" +
+      (allData["S-p"]?allData["S-p"][i]:0) + "\t" +
+      (allData["Pb-s"]?allData["Pb-s"][i]:0) + "\t" +
+      (allData["Pb-p"]?allData["Pb-p"][i]:0) + "\t" +
+      (allData["Pb-d"]?allData["Pb-d"][i]:0) + "\n";
+  }
+});
+
+document.getElementById('copyBtn').addEventListener('click', () => {
+  if (!window.finalTSV) { alert("Chưa có dữ liệu!"); return; }
+  navigator.clipboard.writeText(window.finalTSV);
+  alert("Đã copy bảng sang clipboard!");
+});
+
+document.getElementById('downloadBtn').addEventListener('click', () => {
+  if (!window.finalTSV) { alert("Chưa có dữ liệu!"); return; }
+  const strain = document.getElementById('strainName').value || "strain";
+  const blob = new Blob([window.finalTSV], {type: "text/tab-separated-values"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "PDOS_" + strain + ".tsv";
+  a.click();
+  URL.revokeObjectURL(url);
+});
+</script>
+</body>
+</html>
